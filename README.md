@@ -13,7 +13,7 @@
 **Team Name:** Totoro  
 
 **Authors:**
-1. **Đặng Quốc Anh (Carson)** - Dual Major in Economics & Data Science
+1. **Đặng Quốc Anh (Carson)** 
 2. **Nguyễn Hoài Thu**
 3. **Lê Nhật Trường**
 4. **Lê Hoàng Lâm**
@@ -82,7 +82,7 @@ We engineered 52 highly robust features derived directly from on-chain behavior,
 - **Directional Transaction Velocity:** The speed and trajectory of capital movement from the wallet.
 
 ### Train-Test Split
-To prevent data leakage and simulate true market stress testing, we justified a rigid Out-of-Time (OOT) chronological temporal split. The Training set consists of historical protocol data generated prior to 2023, while the Test set evaluates the model strictly on unseen 2023–2026 Crypto Winter data.
+To prevent data leakage and simulate true market stress testing, we justified a rigid Out-of-Time (OOT) chronological temporal split. The Training set consists of historical protocol data generated prior to 2023, while the Test set evaluates the model strictly on unseen 2023 Crypto Winter data.
 
 ## 4. MODEL DEVELOPMENT
 
