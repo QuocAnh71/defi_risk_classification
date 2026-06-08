@@ -1,0 +1,17 @@
+# DEFI CREDIT RISK - GITIGNORE
+
+# Data Layer 
+data/raw/*.parquet
+data/processed/*.parquet
+
+# Documentation Layer
+docs/
+
+# Model Artifacts
+models/*.joblib
+
+# Python & OS cache
+**/__pycache__/
+*.pyc
+.venv/
+.DS_Store

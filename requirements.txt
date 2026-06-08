@@ -1,0 +1,27 @@
+# -- Data Manipulation & Mathematics --
+# Primary high-performance DataFrame library
+polars>=1.0.0       
+# Core matrix mathematics and array operations
+numpy>=2.0.0        
+# Supplemental data structures (used in EDA/Legacy)
+pandas>=2.2.0       
+# Statistical functions (used in EDA)
+scipy>=1.13.0       
+
+# -- Machine Learning & Modeling --
+# Baseline modeling, metrics, and preprocessing
+scikit-learn>=1.5.0 
+# Champion gradient boosting framework
+xgboost>=2.1.0      
+# Bayesian hyperparameter tuning
+optuna>=3.6.0       
+# Efficient model serialization and persistence
+joblib>=1.4.0       
+
+# -- Interpretation & Visualization --
+# SHapley Additive exPlanations for model interpretability
+shap>=0.46.0        
+# Static plotting backend
+matplotlib>=3.9.0   
+# Statistical data visualization (used in EDA)
+seaborn>=0.13.0
