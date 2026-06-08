@@ -13,7 +13,7 @@
 **Team Name:** Totoro  
 
 **Authors:**
-1. **Đặng Quốc Anh (Carson)** 
+1. **Đặng Quốc Anh** 
 2. **Nguyễn Hoài Thu**
 3. **Lê Nhật Trường**
 4. **Lê Hoàng Lâm**
