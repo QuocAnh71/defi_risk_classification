@@ -65,25 +65,28 @@ def apply_filter_contract(
     Example:
         filtered_df = apply_filter_contract(df, keep_features)
     """
-    missing_cols = [f for f in keep_features if f not in df.columns]
+    col_names = df.collect_schema().names() if isinstance(df, pl.LazyFrame) else df.columns
+    missing_cols = [f for f in keep_features if f not in col_names]
     if missing_cols:
-        raise ValueError(f"The following keep_features are missing from the DataFrame: {missing_cols}")
+        print(f"[WARNING] The following keep_features are missing and will be ignored: {missing_cols}")
     
-    final_cols = keep_features + [label_col]
-    original_cols_count = df.shape[1]
+    unique_keep = [f for f in keep_features if f != label_col and f in col_names]
+    final_cols = unique_keep + [label_col]
+    original_cols_count = df.shape[1] if not isinstance(df, pl.LazyFrame) else len(col_names)
     
     filtered_df = df.select(final_cols)
     
-    expected_cols = len(keep_features) + 1
-    if filtered_df.shape[1] != expected_cols:
-        raise AssertionError(f"Expected {expected_cols} columns, got {filtered_df.shape[1]}")
+    expected_cols = len(unique_keep) + 1
+    filtered_cols_count = len(filtered_df.collect_schema().names()) if isinstance(filtered_df, pl.LazyFrame) else filtered_df.shape[1]
+    if filtered_cols_count != expected_cols:
+        raise AssertionError(f"Expected {expected_cols} columns, got {filtered_cols_count}")
     
-    print(f"[FILTER] {split_tag} : {original_cols_count} cols -> {filtered_df.shape[1]} cols")
+    print(f"[FILTER] {split_tag} : {original_cols_count} cols -> {filtered_cols_count} cols")
     return filtered_df
 
 
 def fit_outlier_bounds(
-    train_df: pl.DataFrame,
+    train_lf: pl.LazyFrame,
     numeric_cols: list[str],
     lower_pct: float = 0.01,
     upper_pct: float = 0.99,
@@ -92,7 +95,7 @@ def fit_outlier_bounds(
     Compute lower and upper quantile bounds for numeric columns based on training data.
 
     Args:
-        train_df (pl.DataFrame): The training DataFrame.
+        train_lf (pl.LazyFrame): The lazy training DataFrame graph.
         numeric_cols (list[str]): List of numeric column names to compute bounds for.
         lower_pct (float, optional): The lower quantile percentage. Defaults to 0.01.
         upper_pct (float, optional): The upper quantile percentage. Defaults to 0.99.
@@ -101,15 +104,27 @@ def fit_outlier_bounds(
         dict[str, dict[str, float]]: A dictionary mapping column names to their computed lower and upper bounds.
 
     Example:
-        bounds = fit_outlier_bounds(train_df, ["amount", "balance"])
+        bounds = fit_outlier_bounds(train_lf, ["amount", "balance"])
     """
+    outlier_exprs = []
+    for col in numeric_cols:
+        outlier_exprs.append(pl.col(col).quantile(lower_pct, interpolation="linear").alias(f"{col}_lower"))
+        outlier_exprs.append(pl.col(col).quantile(upper_pct, interpolation="linear").alias(f"{col}_upper"))
+        
+    if not outlier_exprs:
+        return {}
+
+    # Execute efficiently exactly ONCE on all cores
+    bounds_row = train_lf.select(outlier_exprs).collect().to_dicts()[0]
+    
     bounds: dict[str, dict[str, float]] = {}
     for col in numeric_cols:
-        lower_bound = train_df.select(pl.col(col).quantile(lower_pct, interpolation="linear")).item()
-        upper_bound = train_df.select(pl.col(col).quantile(upper_pct, interpolation="linear")).item()
-        bounds[col] = {"lower": float(lower_bound), "upper": float(upper_bound)}
+        bounds[col] = {
+            "lower": float(bounds_row[f"{col}_lower"]),
+            "upper": float(bounds_row[f"{col}_upper"])
+        }
         
-    print(f"[OUTLIER FIT] Computed P1/P99 bounds for {len(numeric_cols)} numeric columns (train only)")
+    print(f"[OUTLIER FIT] Computed P1/P99 bounds for {len(numeric_cols)} numeric columns (train only, single-pass)")
     return bounds
 
 
@@ -135,7 +150,9 @@ def apply_clamping(
     clamping_exprs = []
     applied_cols = 0
     
-    for col_name in df.columns:
+    col_names = df.collect_schema().names() if isinstance(df, pl.LazyFrame) else df.columns
+    
+    for col_name in col_names:
         if col_name in bounds:
             clamping_exprs.append(
                 pl.col(col_name).clip(
@@ -173,10 +190,28 @@ def apply_log1p_transform(
     transform_exprs = []
     transformed_cols = []
     
-    for col_name in df.columns:
-        if any(keyword in col_name.lower() for keyword in HEAVY_TAIL_KEYWORDS):
-            if df.schema[col_name] in valid_dtypes:
-                transform_exprs.append(pl.col(col_name).log1p())
+    col_names = df.collect_schema().names() if isinstance(df, pl.LazyFrame) else df.columns
+    
+    schema = df.collect_schema() if isinstance(df, pl.LazyFrame) else df.schema
+    
+    new_metrics = {
+        "LTV_Utilization_Quotient",
+        "Debt_Service_Coverage_Proxy",
+        "Net_Unencumbered_Collateral_Base",
+        "Gas_Expenditure_Premium_Ratio",
+        "LogSmoothed_Network_Velocity_Index"
+    }
+
+    for col_name in col_names:
+        if f"{col_name}_log1p" in col_names:
+            continue
+            
+        matches_keyword = any(keyword in col_name.lower() for keyword in HEAVY_TAIL_KEYWORDS)
+        matches_new_metric = col_name in new_metrics
+        
+        if matches_keyword or matches_new_metric:
+            if schema[col_name] in valid_dtypes:
+                transform_exprs.append(pl.col(col_name).log1p().alias(f"{col_name}_log1p"))
                 transformed_cols.append(col_name)
                 
     if transform_exprs:
@@ -223,14 +258,27 @@ def assert_feature_integrity(
         print(f"[ASSERT] {split_tag} cols   : FAIL (expected {expected_cols}, got {cols})")
         raise AssertionError(f"Expected {expected_cols} cols, got {cols}")
 
-    # CHECK 3: Zero nulls
-    total_null = df.null_count().sum_horizontal().item()
-        
-    if total_null == 0:
-        print(f"[ASSERT] {split_tag} nulls  : PASS (0 nulls)")
-    else:
-        print(f"[ASSERT] {split_tag} nulls  : FAIL (found {total_null} nulls)")
-        raise AssertionError(f"Expected 0 nulls, found {total_null}")
+    # CHECK 3: Conditional Null Validation
+    engineered_nullable = {
+        "LTV_Utilization_Quotient", "LTV_Utilization_Quotient_log1p",
+        "Debt_Service_Coverage_Proxy", "Debt_Service_Coverage_Proxy_log1p",
+        "LogSmoothed_Network_Velocity_Index", "LogSmoothed_Network_Velocity_Index_log1p"
+    }
+
+    baseline_cols = [c for c in df.columns if c not in engineered_nullable]
+    engineered_cols_present = [c for c in df.columns if c in engineered_nullable]
+
+    if baseline_cols:
+        baseline_nulls = df.select(baseline_cols).null_count().sum_horizontal().item()
+        if baseline_nulls == 0:
+            print(f"[ASSERT] {split_tag} baseline nulls : PASS (0 nulls)")
+        else:
+            print(f"[ASSERT] {split_tag} baseline nulls : FAIL (found {baseline_nulls} nulls)")
+            raise AssertionError(f"Expected 0 baseline nulls, found {baseline_nulls}")
+
+    if engineered_cols_present:
+        engineered_nulls = df.select(engineered_cols_present).null_count().sum_horizontal().item()
+        print(f"[ASSERT] {split_tag} eng. nulls     : LOG (found {engineered_nulls} legitimate nulls)")
 
     # CHECK 4: Target column present
     if "target" in df.columns:

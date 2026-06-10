@@ -5,7 +5,7 @@ Serves as the single source of truth for all data-cleaning logic.
 
 import polars as pl
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Union
 
 def load_raw_data(path: str) -> pl.DataFrame:
     """
@@ -69,7 +69,7 @@ def apply_median_imputation(df: pl.DataFrame, null_cols: List[str]) -> pl.DataFr
     
     return df.with_columns(exprs)
 
-def prune_flash_wallets(df: pl.DataFrame) -> Tuple[pl.DataFrame, int]:
+def prune_flash_wallets(df: Union[pl.DataFrame, pl.LazyFrame]) -> Tuple[Union[pl.DataFrame, pl.LazyFrame], int]:
     """
     Remove behavioral noise: wallets that are ephemeral/flash accounts.
 
@@ -88,10 +88,17 @@ def prune_flash_wallets(df: pl.DataFrame) -> Tuple[pl.DataFrame, int]:
         (pl.col("wallet_age") == 0) &
         (pl.col("incoming_tx_count") <= 1) &
         (pl.col("total_collateral_eth") == 0) &
-        (pl.col("borrow_amount_sum_eth") == 0)
+        (pl.col("borrow_amount_sum_eth") == 0) &
+        (pl.col("incoming_tx_sum_eth") == 0) &
+        (pl.col("outgoing_tx_sum_eth") == 0)
     )
     
     cleaned_df = df.filter(~mask)
+    
+    if isinstance(df, pl.LazyFrame):
+        print("FLASH WALLET PRUNING (LazyFrame): Evaluation deferred.")
+        removed_count = df.select(pl.len()).collect().item() - cleaned_df.select(pl.len()).collect().item()
+        return cleaned_df, removed_count
     
     n_before = df.height
     n_after = cleaned_df.height
@@ -105,7 +112,7 @@ def prune_flash_wallets(df: pl.DataFrame) -> Tuple[pl.DataFrame, int]:
     
     return cleaned_df, n_removed
 
-def temporal_split(df: pl.DataFrame, timestamp_col: str, cutoff_ts: int = 1672531200) -> Tuple[pl.DataFrame, pl.DataFrame]:
+def temporal_split(df: Union[pl.DataFrame, pl.LazyFrame], timestamp_col: str, cutoff_ts: int = 1672531200) -> Tuple[pl.LazyFrame, pl.LazyFrame]:
     """
     Split the dataset into train and test sets using a strict temporal
     boundary. No row may appear in both sets (wall-clock split, not random).
@@ -121,37 +128,15 @@ def temporal_split(df: pl.DataFrame, timestamp_col: str, cutoff_ts: int = 167253
             train_df: rows where timestamp_col  < cutoff_ts  (pre-2023)
             test_df:  rows where timestamp_col >= cutoff_ts  (post-2023)
     """
-    train_df = df.filter(pl.col(timestamp_col) < cutoff_ts)
-    test_df = df.filter(pl.col(timestamp_col) >= cutoff_ts)
+    # Enforce pure LazyFrame nodes
+    if isinstance(df, pl.DataFrame):
+        df = df.lazy()
+
+    train_lf = df.filter(pl.col(timestamp_col) < cutoff_ts)
+    test_lf = df.filter(pl.col(timestamp_col) >= cutoff_ts)
     
-    total_rows = df.height
-    train_count = train_df.height
-    test_count = test_df.height
-    
-    train_pct = (train_count / total_rows * 100) if total_rows > 0 else 0.0
-    test_pct = (test_count / total_rows * 100) if total_rows > 0 else 0.0
-    
-    print(f"TEMPORAL SPLIT at cutoff = {cutoff_ts} (2023-01-01 UTC):")
-    print(f"  Train (pre-2023) : {train_count} rows  ({train_pct:.1f}%)")
-    print(f"  Test  (post-2023): {test_count} rows  ({test_pct:.1f}%)")
-    
-    if "target" in train_df.columns:
-        vc = train_df.get_column("target").value_counts()
-        train_targets = dict(zip(vc[vc.columns[0]], vc[vc.columns[1]]))
-        train_0 = train_targets.get(0, 0)
-        train_1 = train_targets.get(1, 0)
-        train_ratio = (train_1 / train_0) if train_0 > 0 else 0.0
-        print(f"  Target distribution in train -> 0: {train_0}  1: {train_1}  ratio: {train_ratio:.2f}")
-    
-    if "target" in test_df.columns:
-        vc = test_df.get_column("target").value_counts()
-        test_targets = dict(zip(vc[vc.columns[0]], vc[vc.columns[1]]))
-        test_0 = test_targets.get(0, 0)
-        test_1 = test_targets.get(1, 0)
-        test_ratio = (test_1 / test_0) if test_0 > 0 else 0.0
-        print(f"  Target distribution in test  -> 0: {test_0}  1: {test_1}  ratio: {test_ratio:.2f}")
-        
-    return train_df, test_df
+    print(f"TEMPORAL SPLIT (LazyFrame) at cutoff = {cutoff_ts} (2023-01-01 UTC): Evaluation deferred.")
+    return train_lf, test_lf
 
 def save_parquet(df: pl.DataFrame, path: str) -> None:
     """
